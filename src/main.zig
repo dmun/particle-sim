@@ -1,15 +1,48 @@
 const std = @import("std");
+const sign = std.math.sign;
 const rl = @import("raylib");
+const gl = rl.gl;
 const Vector2 = rl.Vector2;
 const Color = rl.Color;
 
-const gravity = 300;
-const collisionDamping = 0.7;
+const GRAVITY = Vector2.init(0, -9.81);
+const COLLISION_DAMPING = 0.7;
 
 const Particle = struct {
     position: Vector2,
+    force: Vector2,
     velocity: Vector2,
+    mass: f32,
+    radius: f32,
+    color: Color,
+    collision: bool = false,
+
+    pub fn draw(self: *Particle) void {
+        rl.drawCircleV(
+            self.position,
+            self.radius,
+            if (self.collision) Color.red else self.color,
+        );
+        rl.drawLineV(self.position, self.position.add(self.force), Color.green);
+        rl.drawLineV(self.position, self.position.add(self.velocity), Color.yellow);
+    }
 };
+
+pub fn checkBox(p: *Particle) void {
+    const size = 300;
+
+    if (@abs(p.position.y) > size - p.radius) {
+        p.force.x = 0;
+        p.velocity.y = 0;
+        p.position.y = (size - p.radius) * std.math.sign(p.position.y + size - p.radius);
+    }
+
+    if (@abs(p.position.x) > size - p.radius) {
+        p.force.y = 0;
+        p.velocity.x = 0;
+        p.position.x = (size - p.radius) * std.math.sign(p.position.x + size - p.radius);
+    }
+}
 
 pub fn main() anyerror!void {
     const screenWidth = 1280;
@@ -27,51 +60,91 @@ pub fn main() anyerror!void {
     const allocator = std.heap.page_allocator;
     var particles = std.ArrayList(Particle).init(allocator);
 
-    for (0..20) |ix| {
-        for (0..20) |iy| {
+    for (0..2) |ix| {
+        for (0..2) |iy| {
+            const diameter = 30;
             try particles.append(.{
                 .position = Vector2.init(
-                    screenWidth / 3 + @as(f32, @floatFromInt(ix)) * 20,
-                    screenHeight / 3 + @as(f32, @floatFromInt(iy)) * 20,
+                    @as(f32, @floatFromInt(ix)) * diameter,
+                    @as(f32, @floatFromInt(iy)) * diameter,
                 ),
+                .force = Vector2.init(20, 50),
+                .mass = 10,
                 .velocity = Vector2.zero(),
+                .radius = diameter / 2,
+                .color = Color.blue,
             });
         }
     }
 
+    var camera = rl.Camera2D{
+        .zoom = 1,
+        .offset = Vector2.init(screenWidth / 2, screenHeight / 2),
+        .target = Vector2.init(0, 0),
+        .rotation = 0,
+    };
+
     // Main game loop
     while (!rl.windowShouldClose()) {
+        // Input
+        if (rl.isMouseButtonPressed(.mouse_button_left)) {
+            const position = Vector2{
+                .x = rl.getMousePosition().x - camera.offset.x,
+                .y = screenHeight - rl.getMousePosition().y + camera.target.y,
+            };
+            const force = Vector2.init(@floatFromInt(rl.getRandomValue(-10, 10)), 20);
+            try particles.append(.{
+                .mass = 10,
+                .radius = 20,
+                .force = force,
+                .velocity = force.scale(30),
+                .color = Color.blue,
+                .position = position,
+                .collision = false,
+            });
+        }
+
         // Update
-        const frametime = rl.getFrameTime();
-
         for (particles.items) |*p| {
-            p.velocity = Vector2
-                .init(0, 1)
-                .scale(gravity)
-                .scale(frametime)
-                .add(p.velocity);
+            p.force = p.force.add(GRAVITY.scale(p.mass));
+            p.velocity = p.velocity.add(p.force.scale(p.mass).scale(rl.getFrameTime()));
+            p.position = p.position.add(p.velocity.scale(rl.getFrameTime()));
 
-            p.position = p.velocity
-                .scale(frametime)
-                .add(p.position);
+            checkBox(p);
 
-            if (@abs(p.position.x) > screenWidth) {
-                p.position.x = screenWidth * std.math.sign(p.position.x);
-                p.velocity.x *= -1 * collisionDamping;
+            var collision = false;
+            for (particles.items) |*p2| {
+                if (p.position.distance(p2.position) < p.radius + p2.radius) {
+                    collision = true;
+
+                    // p.velocity = p2.velocity.subtract(p.velocity);
+                    // p2.velocity = p.velocity.subtract(p2.velocity);
+
+                    // const n = p2.position.subtract(p.position);
+                    // p.position = p.position.add(n.normalize().scale(p.radius + p2.radius));
+                    // p2.position = p2.position.subtract(n.normalize().scale(p.radius + p2.radius));
+                }
             }
-
-            if (@abs(p.position.y) > screenHeight) {
-                p.position.y = screenHeight * std.math.sign(p.position.y);
-                p.velocity.y *= -1 * collisionDamping;
-            }
+            p.collision = collision;
         }
 
         // Draw
         rl.beginDrawing();
         defer rl.endDrawing();
+        defer rl.drawFPS(0, 0);
+
+        camera.begin();
+        defer camera.end();
+
+        gl.rlPushMatrix();
+        defer gl.rlPopMatrix();
+        gl.rlScalef(1, -1, 0);
+        gl.rlDisableBackfaceCulling();
+
+        rl.drawRectangle(-300, -300, 600, 600, Color.black);
 
         for (particles.items) |*p| {
-            rl.drawCircleV(p.position, 10, Color.red);
+            p.draw();
         }
 
         rl.clearBackground(Color.black.brightness(0.1));
